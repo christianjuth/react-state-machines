@@ -10,6 +10,7 @@ const Button = styled.button`
 `;
 
 const machine = createMachine({
+  id: "toggleSwitch",
   initial: "off",
   context: {},
   states: {
@@ -23,7 +24,7 @@ const machine = createMachine({
 });
 
 export function ToggleSwitch() {
-  const { state, send } = useMachine(machine);
+  const { state, send } = useMachine(machine, true);
 
   return (
     <Button

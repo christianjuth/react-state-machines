@@ -27,6 +27,7 @@ const Post = styled.div`
 `;
 
 const machine = createMachine({
+  id: "instagram",
   initial: "dehydrated",
   context: {
     posts: [] as number[],

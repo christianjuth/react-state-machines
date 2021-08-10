@@ -1,4 +1,4 @@
-import { createMachine, useMachines } from "../stateMachine";
+import { createMachine, useMachine, combineMachines } from "../stateMachine";
 import styled from "styled-components";
 
 const Box = styled.div<{ active: boolean }>`
@@ -10,6 +10,7 @@ const Box = styled.div<{ active: boolean }>`
 `;
 
 const toggleSwitch = createMachine({
+  id: "toggleSwitch",
   initial: "on",
   context: {},
   states: {
@@ -24,8 +25,10 @@ const toggleSwitch = createMachine({
 const s1 = toggleSwitch.config({ initial: "on" });
 const s2 = toggleSwitch.config({ initial: "off" });
 
+const machine = combineMachines("multi-switch", { s1, s2 });
+
 export function CombineMachines() {
-  const [machines, { send }] = useMachines({ s1, s2 });
+  const [machines, { send }] = useMachine(machine);
   return (
     <>
       <Box active={machines.s1.state.value === "on"} />

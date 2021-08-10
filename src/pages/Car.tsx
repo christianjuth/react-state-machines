@@ -1,4 +1,4 @@
-import { createMachine, useMachines } from "../stateMachine";
+import { createMachine, useMachine, combineMachines } from "../stateMachine";
 import { ArrayTable } from "../components";
 import { useCallback } from "react";
 import styled from "styled-components";
@@ -18,6 +18,7 @@ const Table = styled(ArrayTable)`
 `;
 
 const wipersLever = createMachine({
+  id: "wipersLever",
   initial: "idle",
   context: {},
   states: {
@@ -55,6 +56,7 @@ const wipersLever = createMachine({
 });
 
 const turnSignalLever = createMachine({
+  id: "turnSignalLever",
   initial: "idle",
   context: {},
   states: {
@@ -74,6 +76,7 @@ const turnSignalLever = createMachine({
 });
 
 const transmission = createMachine({
+  id: "transmission",
   initial: "park",
   context: {},
   states: {
@@ -83,36 +86,29 @@ const transmission = createMachine({
     reverse: {
       up: "park",
       down: "nutral",
-      stop: "park",
     },
     nutral: {
       up: "reverse",
       down: "drive",
-      stop: "park",
     },
     drive: {
       up: "nutral",
       down: "second",
-      stop: "park",
     },
     second: {
       up: "drive",
       down: "low",
-      stop: "park",
     },
     low: {
       up: "second",
-      stop: "park",
     },
   },
 });
 
 const pedals = createMachine({
+  id: "pedals",
   initial: "idle",
-  context: {
-    breakPreasure: 0,
-    gasPreasure: 0,
-  },
+  context: {},
   states: {
     idle: {
       gas: "gas",
@@ -120,36 +116,26 @@ const pedals = createMachine({
     },
     gas: {
       stop: "idle",
-      release: "idle",
-      gas: "gas",
+      gas: "idle",
       break: "break",
     },
     break: {
       stop: "idle",
-      release: "idle",
       gas: "gas",
-      break: "break",
-    },
-  },
-  events: {
-    onChange: ({ value, context }, send) => {
-      if (value === "gas" && context.breakPreasure > 0) {
-        send("gas", { breakPreasure: 0 });
-      }
-      if (value === "break" && context.gasPreasure > 0) {
-        send("break", { gasPreasure: 0 });
-      }
+      break: "idle",
     },
   },
 });
 
+const car = combineMachines("car", {
+  wipersLever,
+  turnSignalLever,
+  transmission,
+  pedals,
+});
+
 export function Car() {
-  const [m, { send, history }] = useMachines({
-    wipersLever,
-    turnSignalLever,
-    transmission,
-    pedals,
-  });
+  const [m, { send, history }] = useMachine(car, true);
 
   const createButtons = useCallback(
     (events: string[], send: any) =>
@@ -162,13 +148,9 @@ export function Car() {
   );
 
   const start = () => {
-    if (
-      Object.values(m)
-        .map((machine) => machine.state.event)
-        .includes("stop")
-    ) {
-      history.rewind();
-    }
+    // any machines that can be stopped
+    // should resume where they left off
+    history.undo((s: any) => s.event === "stop");
   };
 
   return (
@@ -200,7 +182,7 @@ export function Car() {
         [
           "Pedals",
           m.pedals.state.value,
-          createButtons(["gas", "break", "release"], m.pedals.send),
+          createButtons(["gas", "break"], m.pedals.send),
         ],
       ]}
     />

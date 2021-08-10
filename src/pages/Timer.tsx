@@ -17,6 +17,7 @@ const Form = styled.form`
 `;
 
 const machine = createMachine({
+  id: "timer",
   initial: "idle",
   context: {
     seconds: 0,
@@ -51,7 +52,7 @@ const machine = createMachine({
 });
 
 export function Timer() {
-  const { state, send } = useMachine(machine);
+  const { state, send } = useMachine(machine, true);
   return (
     <Form
       onSubmit={(e) => {

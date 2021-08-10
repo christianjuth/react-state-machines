@@ -1,6 +1,14 @@
 /* eslint @typescript-eslint/no-namespace: "off" */
-import { useState, useMemo, useEffect } from "react";
+import {
+  useState,
+  useMemo,
+  useEffect,
+  useContext,
+  createContext,
+  useCallback,
+} from "react";
 import { v4 as uuid } from "uuid";
+import hash from "object-hash";
 
 // Converts a union of two types into an intersection
 // i.e. A | B -> A & B
@@ -30,7 +38,7 @@ type TypeOfClassMethod<T, M extends keyof T> = T[M] extends Function
   ? T[M]
   : never;
 
-export declare namespace StateMachine {
+export declare namespace Machine {
   type ValidTransitions<Event extends string, States> = Record<Event, States>;
 
   type Config<Context, States> = {
@@ -38,7 +46,7 @@ export declare namespace StateMachine {
     context: Context;
     states: States;
     events?: Partial<Record<EventListenerType, EventFunction<Context, States>>>;
-    id?: string;
+    id: string;
   };
 
   type MachineState<Context, States> = {
@@ -54,7 +62,7 @@ export declare namespace StateMachine {
   type Event<States> = keyof FlattenUnion<States[keyof States]>;
 
   type SendFunction<Context, States> = (
-    event: StateMachine.Event<States>,
+    event: Machine.Event<States>,
     mutateCtx?: ((ctx: Context) => Partial<Context>) | Partial<Context>
   ) => void;
 
@@ -63,15 +71,20 @@ export declare namespace StateMachine {
     state: MachineState<Context, States>,
     send: SendFunction<Context, States>
   ) => void | (() => any) | Promise<(() => any) | void>;
+
+  type ConditionFunction<Context, States> = (
+    state: Machine.MachineState<Context, States>,
+    index: number
+  ) => boolean;
 }
 
 class Machine<Context, States> {
-  config: StateMachine.Config<Context, States>;
-  state: StateMachine.MachineState<Context, States>;
+  config: Machine.Config<Context, States>;
+  state: Machine.MachineState<Context, States>;
   private _eventListeners: Record<
-    StateMachine.EventListenerType,
+    Machine.EventListenerType,
     [
-      StateMachine.EventFunction<Context, States>,
+      Machine.EventFunction<Context, States>,
       (() => any) | void | Promise<(() => any) | void>
     ][]
   > = {
@@ -80,6 +93,13 @@ class Machine<Context, States> {
     onDone: [],
   };
   private _stop = false;
+  private _signature?: string;
+
+  getMachineSignature() {
+    this._signature =
+      this._signature ?? `${this.config.id}-${hash(this.config)}`;
+    return this._signature;
+  }
 
   private updateIsFinalState() {
     const { states } = this.config;
@@ -87,7 +107,7 @@ class Machine<Context, States> {
     this.state.done = states[value] && Object.keys(states[value]).length === 0;
   }
 
-  private async callEventListener(type: StateMachine.EventListenerType) {
+  private async callEventListener(type: Machine.EventListenerType) {
     // Call listeners
     for (const arr of this._eventListeners[type]) {
       const fn = arr[0];
@@ -97,7 +117,7 @@ class Machine<Context, States> {
       }
 
       const stateId = this.state.id;
-      const wrappedSend: StateMachine.SendFunction<Context, States> = (
+      const wrappedSend: Machine.SendFunction<Context, States> = (
         state,
         send
       ) => {
@@ -135,7 +155,7 @@ class Machine<Context, States> {
     return this.state;
   }
 
-  constructor(config: StateMachine.Config<Context, States>) {
+  constructor(config: Machine.Config<Context, States>) {
     this.send = this.send.bind(this);
     this.addEventListener = this.addEventListener.bind(this);
     this.removeEventListener = this.removeEventListener.bind(this);
@@ -154,10 +174,12 @@ class Machine<Context, States> {
     fastFoward: this.fastFoward.bind(this),
     rewind: this.rewind.bind(this),
     reset: this.reset.bind(this),
+    undo: this.undo.bind(this),
+    redo: this.redo.bind(this),
   };
 
   send(
-    event: StateMachine.Event<States>,
+    event: Machine.Event<States>,
     mutateCtx?: ((ctx: Context) => Partial<Context>) | Partial<Context>
   ) {
     if (this._stop) return;
@@ -199,15 +221,15 @@ class Machine<Context, States> {
   }
 
   addEventListener(
-    type: StateMachine.EventListenerType,
-    fn: StateMachine.EventFunction<Context, States>
+    type: Machine.EventListenerType,
+    fn: Machine.EventFunction<Context, States>
   ) {
     this._eventListeners[type].push([fn, undefined]);
   }
 
   removeEventListener(
-    type: StateMachine.EventListenerType,
-    fn: StateMachine.EventFunction<Context, States>
+    type: Machine.EventListenerType,
+    fn: Machine.EventFunction<Context, States>
   ) {
     this._eventListeners[type] = this._eventListeners[type].filter(
       async (arr) => {
@@ -223,14 +245,8 @@ class Machine<Context, States> {
     );
   }
 
-  private rewind(
-    stopFn?: (
-      state: StateMachine.MachineState<Context, States>,
-      index: number
-    ) => boolean
-  ) {
-    let crnt: StateMachine.MachineState<Context, States> | null =
-      this.state.prev;
+  private rewind(stopFn?: Machine.ConditionFunction<Context, States>) {
+    let crnt: Machine.MachineState<Context, States> | null = this.state.prev;
     let index = -1;
     while (crnt) {
       if (stopFn === undefined || stopFn(crnt, index)) {
@@ -243,14 +259,8 @@ class Machine<Context, States> {
     }
   }
 
-  private fastFoward(
-    stopFn?: (
-      state: StateMachine.MachineState<Context, States>,
-      index: number
-    ) => boolean
-  ) {
-    let crnt: StateMachine.MachineState<Context, States> | null =
-      this.state.next;
+  private fastFoward(stopFn?: Machine.ConditionFunction<Context, States>) {
+    let crnt: Machine.MachineState<Context, States> | null = this.state.next;
     let index = 1;
     while (crnt) {
       if (stopFn === undefined || stopFn(crnt, index)) {
@@ -263,9 +273,23 @@ class Machine<Context, States> {
     }
   }
 
+  private undo(conditionFn?: Machine.ConditionFunction<Context, States>) {
+    if (this.state.prev && (!conditionFn || conditionFn(this.state, 0))) {
+      this.state = this.state.prev;
+      this.signalChange();
+    }
+  }
+
+  private redo(conditionFn?: Machine.ConditionFunction<Context, States>) {
+    if (this.state.next && (!conditionFn || conditionFn(this.state, 0))) {
+      this.state = this.state.next;
+      this.signalChange();
+    }
+  }
+
   destroy() {
     this.stop();
-    const eventTypes: StateMachine.EventListenerType[] = [
+    const eventTypes: Machine.EventListenerType[] = [
       "onStart",
       "onChange",
       "onDone",
@@ -279,15 +303,20 @@ class Machine<Context, States> {
 
   start() {
     this._stop = false;
+    this.signalChange();
   }
 
   stop() {
     this._stop = true;
   }
+
+  restoreState(state: Machine.MachineState<Context, States>) {
+    this.state = state;
+  }
 }
 
 export function createMachine<Context, States>(
-  config: StateMachine.Config<Context, States>
+  config: Machine.Config<Context, States>
 ) {
   function create() {
     return new Machine<Context, States>(config);
@@ -311,7 +340,7 @@ export function createMachine<Context, States>(
 export function combineMachines<
   Key extends string,
   Machines extends Record<Key, () => Machine<any, any>>
->(configs: Machines) {
+>(id: string, configs: Machines) {
   return () => {
     const machines: ObjectReturnValues<Machines> = {} as any;
     Object.entries(configs).forEach(([key, m]: [string, any]) => {
@@ -345,67 +374,131 @@ export function combineMachines<
           fastForward: createFunction("history", "fastFoward") as any,
           rewind: createFunction("history", "rewind") as any,
           reset: createFunction("history", "reset") as any,
+          undo: createFunction("history", "undo") as any,
+          redo: createFunction("history", "redo") as any,
         },
+        id,
       },
     ] as const;
   };
 }
 
-export function useMachine<Context, States>(
-  machineConfig: () => Machine<Context, States>
-) {
+export function useMachine<
+  MachineConfig extends ReturnType<typeof combineMachines>
+>(machineConfig: MachineConfig, persist?: boolean): ReturnType<MachineConfig>;
+export function useMachine<MachineConfig extends () => Machine<any, any>>(
+  machineConfig: MachineConfig,
+  persist?: boolean
+): ReturnType<MachineConfig>;
+export function useMachine<MachineConfig extends () => Machine<any, any>>(
+  machineConfig: MachineConfig,
+  persist = false
+): ReturnType<MachineConfig> {
   const [, setSignal] = useState(0);
+  const context = useContext(Context);
 
   const machine = useMemo(() => {
-    const m = machineConfig();
-    m.stop();
+    const m = machineConfig() as ReturnType<MachineConfig>;
+    if (Array.isArray(m)) {
+      // Combined machines
+      m[1].stop();
+    } else {
+      // Single machine
+      m.stop();
+    }
     return m;
   }, [machineConfig]);
 
-  useEffect(() => {
-    function sendSignal() {
-      setSignal((n) => n + 1);
-    }
-    machine.addEventListener("onChange", sendSignal);
-    machine.start();
-    return () => {
-      machine.removeEventListener("onChange", sendSignal);
-      machine.destroy();
-    };
-  }, [machine]);
-
-  return machine;
-}
-
-export function useMachines<
-  Key extends string,
-  Machines extends Record<Key, () => Machine<any, any>>
->(machineConfigs: Machines) {
-  const [, setSignal] = useState(0);
-
-  const machines = useMemo(
-    () => {
-      const machines = combineMachines(machineConfigs)();
-      const [, tellAll] = machines;
-      tellAll.stop();
-      return machines;
+  const restoreMachineState = useCallback(
+    (m: Machine<any, any>, prefix = "") => {
+      const signature = [prefix, m.getMachineSignature()]
+        .filter(Boolean)
+        .join("-");
+      if (persist && context.states[signature]) {
+        m.restoreState(context.states[signature]);
+      }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [...Object.values(machineConfigs)]
+    [context, persist]
+  );
+
+  const saveMachineState = useCallback(
+    (m: Machine<any, any>, prefix = "") => {
+      const signature = [prefix, m.getMachineSignature()]
+        .filter(Boolean)
+        .join("-");
+      if (persist) {
+        context.saveState(signature, m.state);
+      }
+    },
+    [context, persist]
   );
 
   useEffect(() => {
     function sendSignal() {
       setSignal((n) => n + 1);
     }
-    const [, tellAll] = machines;
-    tellAll.addEventListener("onChange", sendSignal);
-    tellAll.start();
-    return () => {
-      tellAll.removeEventListener("onChange", sendSignal);
-      tellAll.destroy();
-    };
-  }, [machines]);
+    // Combined machines
+    if (Array.isArray(machine)) {
+      machine[1].addEventListener("onChange", sendSignal);
+      for (const m of Object.values(machine[0])) {
+        restoreMachineState(m as any, machine[1].id);
+      }
+      machine[1].start();
+      return () => {
+        machine[1].removeEventListener("onChange", sendSignal);
+        for (const m of Object.values(machine[0])) {
+          saveMachineState(m as any, machine[1].id);
+        }
+        machine[1].destroy();
+      };
+    }
+    // Single machine
+    else {
+      machine.addEventListener("onChange", sendSignal);
+      restoreMachineState(machine);
+      machine.start();
+      return () => {
+        machine.removeEventListener("onChange", sendSignal);
+        saveMachineState(machine);
+        machine.destroy();
+      };
+    }
+  }, [machine, persist, context, restoreMachineState, saveMachineState]);
 
-  return machines;
+  return machine;
+}
+
+const Context = createContext<{
+  states: Record<string, Machine.MachineState<any, any>>;
+  saveState: (id: string, state: Machine.MachineState<any, any>) => any;
+}>({
+  states: {},
+  saveState: () => {},
+});
+
+export function Provider({
+  children,
+}: {
+  children: JSX.Element | JSX.Element[];
+}) {
+  const [states, setStates] = useState<
+    Record<string, Machine.MachineState<any, any>>
+  >({});
+
+  const saveState = useCallback(
+    (id: string, state: Machine.MachineState<any, any>) => {
+      setStates((s) => {
+        s[id] = state;
+        console.log(s);
+        return s;
+      });
+    },
+    []
+  );
+
+  return (
+    <Context.Provider value={{ states, saveState }}>
+      {children}
+    </Context.Provider>
+  );
 }
