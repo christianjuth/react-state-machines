@@ -167,7 +167,7 @@ class Machine<Context, States> {
       this.config.states[this.state.value]?.[event];
 
     // Protect against invaid transition
-    if (!nextStateValue) return;
+    if (!nextStateValue || !this.config.states[nextStateValue]) return;
 
     let context = this.state.context;
 
@@ -319,27 +319,33 @@ export function combineMachines<
     });
 
     function createFunction<Name extends keyof Machine<any, any>>(
-      fnName: Name
-    ): Record<Name, TypeOfClassMethod<Machine<any, any>, Name>> {
-      return {
-        [fnName]: (...args: any[]) => {
-          for (const key in machines) {
-            // @ts-ignore
-            machines[key][fnName](...args);
-          }
-        },
-      } as any;
+      key1: Name,
+      key2?: string
+    ): TypeOfClassMethod<Machine<any, any>, Name> {
+      return ((...args: any[]) => {
+        for (const machineName in machines) {
+          // @ts-ignore
+          if (key2) machines[machineName][key1][key2](...args);
+          // @ts-ignore
+          else machines[machineName][key1](...args);
+        }
+      }) as any;
     }
 
     return [
       machines,
       {
-        ...createFunction("send"),
-        ...createFunction("addEventListener"),
-        ...createFunction("removeEventListener"),
-        ...createFunction("destroy"),
-        ...createFunction("start"),
-        ...createFunction("stop"),
+        send: createFunction("send"),
+        addEventListener: createFunction("addEventListener"),
+        removeEventListener: createFunction("removeEventListener"),
+        destroy: createFunction("destroy"),
+        start: createFunction("start"),
+        stop: createFunction("stop"),
+        history: {
+          fastForward: createFunction("history", "fastFoward") as any,
+          rewind: createFunction("history", "rewind") as any,
+          reset: createFunction("history", "reset") as any,
+        },
       },
     ] as const;
   };

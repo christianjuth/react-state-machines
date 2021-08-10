@@ -34,6 +34,7 @@ const routes = {
   "/instagram": Pages.Instagram,
   "/activity-indicator": Pages.ActivityIndicator,
   "/combine-machines": Pages.CombineMachines,
+  "/car": Pages.Car,
 };
 
 function Sidebar() {
